@@ -385,7 +385,7 @@ right thread.
 ```mermaid
 sequenceDiagram
     autonumber
-    participant A as Audio thread
+    participant A as Audio thread (host)
     participant P as Plugin
     participant M as Main thread (host)
 
