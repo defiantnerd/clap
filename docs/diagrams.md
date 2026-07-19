@@ -168,7 +168,7 @@ sequenceDiagram
     else CLAP_PROCESS_TAIL
         Note over H: consult clap_plugin_tail to decide
     else CLAP_PROCESS_SLEEP
-        Note over H: host may put the plugin to sleep;<br/>woken by new events or host->request_process()
+        Note over H: host may put the plugin to sleep,<br/>woken by new events or host request_process()
     else CLAP_PROCESS_ERROR
         Note over H: discard output buffer
     end
@@ -245,7 +245,7 @@ sequenceDiagram
             P->>H: clap_host_params.clear(param_id, CLAP_PARAM_CLEAR_ALL)
         end
         P->>H: clap_host_params.rescan(CLAP_PARAM_RESCAN_ALL)
-        Note over H: RESCAN_ALL is only allowed while deactivated;<br/>it invalidates cookies and everything the host cached
+        Note over H: RESCAN_ALL is only allowed while deactivated,<br/>it invalidates cookies and everything the host cached
         H->>P: count(), get_info() for all params
         H->>P: activate(), start_processing()
     end
@@ -353,7 +353,7 @@ sequenceDiagram
     else host rejects
         H-->>P: false
     end
-    Note over P,H: off-main-thread: true only acknowledges the request;<br/>if it later fails the host calls set_size() to revert
+    Note over P,H: off-main-thread: true only acknowledges the request,<br/>if it later fails the host calls set_size() to revert
 
     Note over P,H: user drags the window edge (embedded)
     H->>P: can_resize()
