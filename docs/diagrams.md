@@ -15,8 +15,9 @@ Contents:
 6. [GUI lifecycle](#6-gui-lifecycle)
 7. [Threading model and deferred requests](#7-threading-model-and-deferred-requests)
 8. [Changing the audio port configuration](#8-changing-the-audio-port-configuration)
-9. [Preset discovery and preset load](#9-preset-discovery-and-preset-load)
-10. [Voice info and polyphonic modulation](#10-voice-info-and-polyphonic-modulation)
+9. [Audio bus configuration negotiation](#9-audio-bus-configuration-negotiation)
+10. [Preset discovery and preset load](#10-preset-discovery-and-preset-load)
+11. [Voice info and polyphonic modulation](#11-voice-info-and-polyphonic-modulation)
 
 ---
 
@@ -450,7 +451,76 @@ The same restart pattern applies to note ports
 ([ext/note-ports.h](../include/clap/ext/note-ports.h)) and latency changes
 ([ext/latency.h](../include/clap/ext/latency.h)).
 
-## 9. Preset discovery and preset load
+## 9. Audio bus configuration negotiation
+
+Two complementary extensions let host and plugin agree on a bus layout, both operating
+while the plugin is deactivated:
+
+- **Pull**: the plugin offers a list of preset configurations (mono, stereo, surround, ...)
+  via [ext/audio-ports-config.h](../include/clap/ext/audio-ports-config.h) and the host (or
+  the user, through a menu) selects one.
+- **Push**: the host dictates the layout it wants via
+  [ext/configurable-audio-ports.h](../include/clap/ext/configurable-audio-ports.h) and asks
+  the plugin whether it can apply it.
+
+Plugins with very complex configuration spaces should instead let the user configure the
+ports from the plugin GUI and call `clap_host_audio_ports.rescan(CLAP_AUDIO_PORTS_RESCAN_ALL)`
+(see the previous section).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant H as Host (main-thread)
+    participant P as clap_plugin
+
+    Note over H,P: plugin must be deactivated for select() and apply_configuration()
+
+    Note over H,P: pull, plugin offers preset configs (CLAP_EXT_AUDIO_PORTS_CONFIG)
+    H->>P: audio_ports_config.count()
+    loop for each config index
+        H->>P: audio_ports_config.get(index)
+        P-->>H: clap_audio_ports_config (id, name, main in/out channels, port types)
+        opt exact per-port layout (CLAP_EXT_AUDIO_PORTS_CONFIG_INFO)
+            H->>P: audio_ports_config_info.get(config_id, port_index, is_input)
+            P-->>H: clap_audio_port_info
+        end
+    end
+    Note over H: pick the config that fits the track,<br/>or present the list to the user as a menu
+    H->>P: audio_ports_config.select(config_id)
+    P-->>H: true
+    H->>P: audio_ports.count(), audio_ports.get(...)
+    Note over H: after select() the host must rescan the audio ports
+
+    Note over H,P: push, host dictates the layout (CLAP_EXT_CONFIGURABLE_AUDIO_PORTS)
+    Note over H: build clap_audio_port_configuration_request list:<br/>is_input, port_index, channel_count,<br/>port_type and port_details (surround map, ambisonic info)
+    H->>P: configurable_audio_ports.can_apply_configuration(requests, count)
+    alt plugin can do it
+        P-->>H: true
+        H->>P: apply_configuration(requests, count)
+        P-->>H: true
+        Note over H,P: all requests are applied atomically (or discarded together),<br/>no audio ports rescan is needed afterwards
+    else plugin cannot
+        P-->>H: false
+        Note over H: fall back to a preset config<br/>or to the plugin's default layout
+    end
+
+    H->>P: activate(sample_rate, min_frames, max_frames)
+
+    opt the plugin's config list changes later
+        P->>H: clap_host_audio_ports_config.rescan()
+        H->>P: audio_ports_config.count(), get(...) again
+        opt currently selected config (CLAP_EXT_AUDIO_PORTS_CONFIG_INFO)
+            H->>P: audio_ports_config_info.current_config()
+            P-->>H: config_id or CLAP_INVALID_ID
+        end
+    end
+```
+
+Note: `audio_ports_config.select()` invalidates the per-port activation state of
+[ext/audio-ports-activation.h](../include/clap/ext/audio-ports-activation.h) — ports revert
+to active and the host must re-apply any deactivation it wants.
+
+## 10. Preset discovery and preset load
 
 Preset discovery ([factory/preset-discovery.h](../include/clap/factory/preset-discovery.h))
 runs **without instantiating any plugin** — a separate factory lets the host index presets in
@@ -509,7 +579,7 @@ sequenceDiagram
     end
 ```
 
-## 10. Voice info and polyphonic modulation
+## 11. Voice info and polyphonic modulation
 
 [ext/voice-info.h](../include/clap/ext/voice-info.h) plus the note events from
 [events.h](../include/clap/events.h). Polyphonic modulation only works if the host's voice
