@@ -467,15 +467,20 @@ Plugins with very complex configuration spaces should instead let the user confi
 ports from the plugin GUI and call `clap_host_audio_ports.rescan(CLAP_AUDIO_PORTS_RESCAN_ALL)`
 (see the previous section).
 
+### 9a. Pull: preset configurations (CLAP_EXT_AUDIO_PORTS_CONFIG)
+
+The plugin publishes a small list of named configurations describing its main input and
+output ports. The host scans them, picks one (or lets the user pick via a menu) and selects
+it while the plugin is deactivated. After `select()` the host must rescan the audio ports.
+
 ```mermaid
 sequenceDiagram
     autonumber
     participant H as Host (main-thread)
     participant P as clap_plugin
 
-    Note over H,P: plugin must be deactivated for select() and apply_configuration()
+    Note over H,P: plugin is deactivated
 
-    Note over H,P: pull, plugin offers preset configs (CLAP_EXT_AUDIO_PORTS_CONFIG)
     H->>P: audio_ports_config.count()
     loop for each config index
         H->>P: audio_ports_config.get(index)
@@ -485,31 +490,18 @@ sequenceDiagram
             P-->>H: clap_audio_port_info
         end
     end
+
     Note over H: pick the config that fits the track,<br/>or present the list to the user as a menu
     H->>P: audio_ports_config.select(config_id)
     P-->>H: true
     H->>P: audio_ports.count(), audio_ports.get(...)
     Note over H: after select() the host must rescan the audio ports
-
-    Note over H,P: push, host dictates the layout (CLAP_EXT_CONFIGURABLE_AUDIO_PORTS)
-    Note over H: build clap_audio_port_configuration_request list:<br/>is_input, port_index, channel_count,<br/>port_type and port_details (surround map, ambisonic info)
-    H->>P: configurable_audio_ports.can_apply_configuration(requests, count)
-    alt plugin can do it
-        P-->>H: true
-        H->>P: apply_configuration(requests, count)
-        P-->>H: true
-        Note over H,P: all requests are applied atomically (or discarded together),<br/>no audio ports rescan is needed afterwards
-    else plugin cannot
-        P-->>H: false
-        Note over H: fall back to a preset config<br/>or to the plugin's default layout
-    end
-
     H->>P: activate(sample_rate, min_frames, max_frames)
 
     opt the plugin's config list changes later
         P->>H: clap_host_audio_ports_config.rescan()
         H->>P: audio_ports_config.count(), get(...) again
-        opt currently selected config (CLAP_EXT_AUDIO_PORTS_CONFIG_INFO)
+        opt which config is active now? (CLAP_EXT_AUDIO_PORTS_CONFIG_INFO)
             H->>P: audio_ports_config_info.current_config()
             P-->>H: config_id or CLAP_INVALID_ID
         end
@@ -519,6 +511,37 @@ sequenceDiagram
 Note: `audio_ports_config.select()` invalidates the per-port activation state of
 [ext/audio-ports-activation.h](../include/clap/ext/audio-ports-activation.h) — ports revert
 to active and the host must re-apply any deactivation it wants.
+
+### 9b. Push: host-requested layout (CLAP_EXT_CONFIGURABLE_AUDIO_PORTS)
+
+The host builds the exact layout it wants — one request per port — and asks the plugin to
+apply it. All requests succeed or fail together, and a successful apply replaces the port
+rescan: neither `clap_host_audio_ports.rescan()` nor a host-side port scan is required
+afterwards.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant H as Host (main-thread)
+    participant P as clap_plugin
+
+    Note over H,P: plugin is deactivated
+
+    Note over H: build clap_audio_port_configuration_request list:<br/>is_input, port_index, channel_count,<br/>port_type and port_details (surround map, ambisonic info)
+
+    H->>P: configurable_audio_ports.can_apply_configuration(requests, count)
+    alt plugin can do it
+        P-->>H: true
+        H->>P: apply_configuration(requests, count)
+        P-->>H: true
+        Note over H,P: all requests are applied atomically (or discarded together),<br/>no audio ports rescan is needed afterwards
+    else plugin cannot
+        P-->>H: false
+        Note over H: fall back to a preset config (9a)<br/>or to the plugin's default layout
+    end
+
+    H->>P: activate(sample_rate, min_frames, max_frames)
+```
 
 ## 10. Preset discovery and preset load
 
