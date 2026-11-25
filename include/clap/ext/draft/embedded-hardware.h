@@ -323,7 +323,7 @@
 */
 // clang-format on
 
-static CLAP_CONSTEXPR const char CLAP_EXT_EMBEDDED_HARDWARE[] = "clap.embedded-hardware/1";
+static CLAP_CONSTEXPR const char CLAP_EXT_EMBEDDED_HARDWARE[] = "clap.embedded-hardware/2";
 
 // Add to clap_plugin_descriptor.features to mark a plugin built for hardware, so a
 // launcher on a device can list those first.
