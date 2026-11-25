@@ -251,12 +251,12 @@
   APIs: how the plugin draws a claimed surface. An API is named by a string, as
   clap.gui names window APIs, with a version of its own, so one API can change without
   the extension's id changing: CLAP_EMBEDDED_HARDWARE_DISPLAY_API_PIXELS is
-  "pixels/1". An API a vendor adds starts with its reverse domain name
+  "pixels/2". An API a vendor adds starts with its reverse domain name
   ("com.example.sdl-renderer/1"). The host offers an API through display_open(), whose
   config names it: one the host supports (display_is_api_supported) and, if the plugin
   has one, its choice (display_get_preferred_api). A plugin which cannot draw that API
   returns false from display_open(), and the host may offer another. Every host
-  supports pixels/1 on every GRAPHIC display, so a plugin which draws pixels/1 draws
+  supports pixels/2 on every GRAPHIC display, so a plugin which draws pixels/2 draws
   anywhere.
 
   An API hands the plugin a surface twice: once in the config, for as long as the
@@ -267,13 +267,13 @@
   API says what it puts in them, and whether the host calls display_render() at all.
 
   Presenting: each API says how a frame reaches the screen. With an API the host
-  renders on request, as pixels/1, the host presents what display_render() returned
+  renders on request, as pixels/2, the host presents what display_render() returned
   RENDERED at the display's next refresh, whatever its rate (60 Hz, 120 Hz, variable),
   and present_time_ns says when that is. An API in which the plugin owns a swapchain,
   e.g. a later vulkan/1, presents frames itself with present modes of its own in its
   own surface struct, and never gets display_render().
 
-  pixels/1: the plugin draws XRGB8888 into the host's buffer, frame.surface.pixels,
+  pixels/2: the plugin draws XRGB8888 into the host's buffer, frame.surface.pixels,
   and the host converts to what the display can show, as color_format says, so a
   1-bit OLED is drawn in two colours. config.surface is null. Drawing is pull based:
   the plugin calls display_request_frame() for a surface when it has something new to
@@ -317,7 +317,7 @@
   Not covered: a panel the plugin declares for the host to bind physical
   controls to (keys, encoders, legends);
   curves the host draws on a surface, in the data model of clap.mini-curve-display;
-  layers and plugin-owned buffers for pixels; display APIs beyond pixels/1, such as
+  layers and plugin-owned buffers for pixels; display APIs beyond pixels/2, such as
   GLES, Vulkan or an exclusive screen (e.g. KMS/DRM), which the API hook leaves room
   for; moving motorized faders; a writable data folder, battery and background states.
 */
@@ -333,8 +333,8 @@ static CLAP_CONSTEXPR const char CLAP_EXT_EMBEDDED_HARDWARE[] = "clap.embedded-h
 extern "C" {
 #endif
 
-// Display APIs, see -- Displays --. Every host supports pixels/1 on a GRAPHIC display.
-#define CLAP_EMBEDDED_HARDWARE_DISPLAY_API_PIXELS "pixels/1"
+// Display APIs, see -- Displays --. Every host supports pixels/2 on a GRAPHIC display.
+#define CLAP_EMBEDDED_HARDWARE_DISPLAY_API_PIXELS "pixels/2"
 
 // Keys for get_property(). The colour of the case, "#rrggbb"; asked of a panel, the
 // colour of that panel, e.g. an expander in a colour of its own.
@@ -753,7 +753,7 @@ enum clap_embedded_hardware_display_kind {
    CLAP_EMBEDDED_HARDWARE_DISPLAY_GRAPHIC = 2,
 };
 
-// The colours a display can show natively. The plugin draws pixels/1 in XRGB8888
+// The colours a display can show natively. The plugin draws pixels/2 in XRGB8888
 // whatever this says, and the host converts.
 enum clap_embedded_hardware_display_color_format {
    // TEXT displays, and unknown
@@ -1163,12 +1163,12 @@ typedef struct clap_embedded_hardware_rect {
    uint32_t height;
 } clap_embedded_hardware_rect_t;
 
-// pixels/1's surface in a frame: the host's buffer, valid only during display_render.
+// pixels/2's surface in a frame: the host's buffer, valid only during display_render.
 typedef struct clap_embedded_hardware_pixels_surface {
    void    *data;
    uint32_t stride_bytes;
 
-   // clap_embedded_hardware_display_color_format: XRGB8888 in pixels/1
+   // clap_embedded_hardware_display_color_format: XRGB8888 in pixels/2
    uint32_t color_format;
 
    // 0: the contents are undefined, draw everything. n: the buffer holds the frame
@@ -1193,7 +1193,7 @@ typedef struct clap_embedded_hardware_display_config {
    const char *api;
 
    // What the API hands over for as long as the display is open, selected by api; null
-   // for pixels/1.
+   // for pixels/2.
    union {
       const void *ptr;
    } surface;
@@ -1214,7 +1214,7 @@ typedef struct clap_embedded_hardware_frame {
 
    // What the API hands over for this frame, selected by api.
    union {
-      // pixels/1
+      // pixels/2
       clap_embedded_hardware_pixels_surface_t *pixels;
       void                                    *ptr;
    } surface;
@@ -1329,7 +1329,7 @@ typedef struct clap_host_embedded_hardware {
                               const clap_color_t *colors);
 
    // Asks for one display_render() of a display the plugin opened, at its next
-   // refresh, for an API which renders on request, as pixels/1 does; calls before that
+   // refresh, for an API which renders on request, as pixels/2 does; calls before that
    // coalesce. Wait-free, so a meter can ask from the audio thread.
    // [thread-safe]
    void(CLAP_ABI *display_request_frame)(const clap_host_t *host, clap_id display_id);
@@ -1432,7 +1432,7 @@ typedef struct clap_plugin_embedded_hardware {
                                        clap_id              display_id,
                                        bool                 visible);
 
-   // Draws one frame into frame->surface, as frame->api says: for pixels/1 into
+   // Draws one frame into frame->surface, as frame->api says: for pixels/2 into
    // frame->surface.pixels->data, listing what changed in its damage. Only called while
    // visible, and only for an API which renders on request. Returns a
    // clap_embedded_hardware_render_result.
