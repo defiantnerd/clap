@@ -10,14 +10,15 @@
 /*
   clap.embedded-hardware
 
-  Lets a plugin which runs inside a piece of hardware - a pedal, a desktop box, the
-  channel strip of a digital mixing desk with the plugin on an insert, a rack unit, a
-  handheld game device where the plugin is the whole app - find out what it
-  runs on, where the physical controls are and what is printed on them, and talk to
-  them: it receives buttons, knobs, encoders, faders, sticks, triggers, touch and motion,
-  and drives LEDs, LED rings and strips, rumble motors and displays. A null result from
-  get_extension means there is no hardware: the plugin runs in an ordinary host, and a
-  plugin built for hardware must still work there as a plain CLAP.
+  Lets a plugin find out what hardware it has, where the physical controls are and
+  what is printed on them, and talk to them: it receives buttons, knobs, encoders,
+  faders, sticks, triggers, touch and motion, and drives LEDs, LED rings and strips,
+  rumble motors and displays. The hardware may be what the plugin runs inside - a
+  pedal, a desktop box, the channel strip of a digital mixing desk with the plugin on
+  an insert, a handheld game device where the plugin is the whole app - or controllers
+  plugged into the computer a host runs on, a Push, a Maschine, a gamepad. A null
+  result from get_extension means there is no hardware: the plugin runs in an ordinary
+  host, and a plugin built for hardware must still work there as a plain CLAP.
 
     auto *eh = (const clap_host_embedded_hardware_t *)host->get_extension(
         host, CLAP_EXT_EMBEDDED_HARDWARE);
@@ -30,13 +31,21 @@
   A host offering this extension must offer the event registry and answer the query.
   The query is the plugin's opt-in: see -- Input --.
 
-  The device: the hardware the plugin runs on. It has zero or more panels - a main
-  panel on the front, the shoulder buttons on the top edge, an expander which may come
-  and go, a game controller plugged in over USB, the built-in controls of a handheld -
-  and each panel carries elements: the physical things a user touches, looks at or
-  feels. A device with no panels still describes itself.
+  Devices: the pieces of hardware the host shows the plugin, zero or more, which can
+  come and go. A pedal or a handheld shows one, itself, with DEVICE_HOST; a host on a
+  computer may show several controllers, or none until one is plugged in. Which devices
+  a plugin instance sees is the host's choice: a host may give a controller to the
+  plugin on the selected track and move it to another instance later, and the first
+  then sees it removed and the second sees it attached, through hardware_changed and
+  RESET, with no handover of its own.
 
-  Faces: a panel lies on one face of the device's case: the front, where the screen
+  Panels: each device has zero or more panels - a main panel on the front, the
+  shoulder buttons on the top edge, an expander which may come and go, a game
+  controller plugged into a handheld, the built-in controls of a handheld - and each
+  panel carries elements: the physical things a user touches, looks at or feels. A
+  device with no panels still describes itself.
+
+  Faces: a panel lies on one face of its device's case: the front, where the screen
   and most controls are, the back, or one of the four edges, e.g. the top edge with the
   shoulder buttons of a handheld or the bottom edge with its headphone jack. A device
   with controls on several faces lists one panel per face. A panel which is not part of
@@ -56,13 +65,15 @@
   sensor's y runs up, and motion's z out of the front, as on every game controller;
   everything placed on a panel, touch points included, has y running down.
 
-  Identity: panel and element ids are chosen by the device and unique across the whole
-  device; never enumeration indices. For everything the device can recognise - its own
-  panels, an expander by its serial or slot - they are stable across boots, firmware
-  updates and re-attaching, so a plugin may persist them, e.g. in a user's control
-  assignment. A unit the device cannot tell from another of its kind, typically a
-  generic USB pad, gets fresh ids on every attach, never reused while the host runs, so
-  that no stale id ever addresses a different controller.
+  Identity: device, panel and element ids are chosen by the host from one id space, so
+  no two things share an id and an element id alone says which panel and device an
+  event is from; events carry no device id. Ids are never enumeration indices. For
+  everything the host can recognise - a device by its model and serial, its own panels,
+  an expander by its serial or slot - they are stable across boots, firmware updates
+  and re-attaching, so a plugin may persist them, e.g. in a user's control assignment.
+  A unit the host cannot tell from another of its kind, typically a generic USB pad,
+  gets fresh ids on every attach, never reused while the host runs, so that no stale id
+  ever addresses a different controller.
 
   Roles: an element's id says which control it is on this device; its role, if it has
   one, says what it is on any device - the south face button, the left stick, the
@@ -77,6 +88,14 @@
   scribble display beside a knob and a touch screen over a display are linked the same
   way. Each part keeps its own kind and events, so a plugin which only knows buttons
   still works the push switch.
+
+  Details: element_info holds what every element has - kind, role, place, print. What
+  only some kinds have - a switch's positions, an LED's colours, a display's pixels -
+  is a detail, a struct of its own read with get_element_detail() by detail type; each
+  kind below says which details it has. An element has any number of details, so new
+  hardware, a ring with a heart rate sensor, is a new kind with a new detail and a new
+  event type, and nothing which exists changes. A plugin skips a kind, detail type or
+  event type it does not know.
 
   Printed labels: label is what is printed on or next to the element ("Mix", "A", "△"),
   as the user reads it, in UTF-8 with symbols where Unicode has them; alt_label is a
@@ -96,8 +115,8 @@
   case with underscores; the ones this header names are the
   CLAP_EMBEDDED_HARDWARE_PROPERTY_ defines, and a vendor's own keys start with
   its reverse domain name ("com.example.amp_model"). Values are UTF-8, in the format
-  the key states; colours are "#rrggbb". A property is asked of the device or of one
-  panel, and a panel without a value of its own answers with the device's.
+  the key states; colours are "#rrggbb". A property is asked of a device or of one
+  panel, and a panel without a value of its own answers with its device's.
 
   -- Input --
 
@@ -113,9 +132,18 @@
   has asked, and its init() has returned, the host sends it no event in this space,
   not even a RESET, and does not call its input_routing(): a plain CLAP may not check
   header.space_id, and would take a button for a note. Once it has asked, a plugin
-  without the plugin side of this extension gets BUTTON, POSITION, VALUE, DELTA and
+  without the plugin side of this extension gets BUTTON, SWITCH, VALUE, DELTA and
   TOUCH in process(), and the high-rate kinds (AXIS, MOTION, TOUCH_POINT) nowhere, so
   it is not flooded on a handheld.
+
+  Checking spaces: because hardware arrives as events, alongside notes and parameters,
+  it is critical that a plugin tests header.space_id and header.type carefully and
+  fully on every event, in process() and in process_main_thread(). The type numbers
+  of this space overlap the core ones: a plugin which reads header.type without first
+  checking header.space_id == CLAP_CORE_EVENT_SPACE_ID takes a BUTTON for a NOTE_ON, a
+  SWITCH for a NOTE_OFF and a stick's AXIS for a PARAM_VALUE. The opt-in protects a
+  plugin only until it asks for the space; from then on, every switch over
+  header.type sits inside a check of header.space_id.
 
   Every input event carries timestamp_ns, the time the hardware reported it on the
   clock get_time_ns() reads, the same for the copy on each thread. Live events - a
@@ -126,7 +154,7 @@
   the thread it arrives on: every button released, every touch gone, nothing moving.
   Replayed, non-live events for the current state of whatever is routed to that thread
   follow immediately: a BUTTON for every button held, a TOUCH for every element
-  touched, the POSITION of every switch, the VALUE of every pot, fader, pedal, touch
+  touched, the SWITCH of every switch, the VALUE of every pot, fader, pedal, touch
   strip and analog button, the AXIS of every stick away from its centre and a
   TOUCH_POINT BEGIN for every finger down. Between two RESETs, every press on a thread
   is followed by exactly one release on that thread. A host sends RESET
@@ -134,8 +162,8 @@
     process() after each start_processing(), or after the plugin asked for the space if
     it was already processing; on the main thread when input_routing() has first been
     asked;
-  - for a panel when it is attached (then its state follows) and when it is removed
-    (with nothing following);
+  - for a panel when it is attached, its device's included (then its state follows),
+    and when it is removed (with nothing following);
   - on a thread an element or event type was routed away from, after input_routing()
     is asked again;
   - after resume();
@@ -143,8 +171,16 @@
   Events for the audio thread which arrive while the plugin is not processing are
   dropped, not queued; the RESET at the next start restores what matters.
 
-  get_input_state() reads where an input is now on the main thread, for a plugin which
-  wants it before any event.
+  State: get_input_state() reads where an input is now, on the main thread, for a
+  plugin which wants it before any event. It asks for one event type of one element
+  and fills in the event of that type a RESET would replay, so a pressable, touchable
+  knob is three questions - BUTTON on its push switch, TOUCH and VALUE on the knob -
+  each answered in the event struct the plugin already reads:
+
+    clap_embedded_hardware_event_value_t v;
+    if (eh->get_input_state(host, knob, CLAP_EMBEDDED_HARDWARE_EVENT_VALUE, &v.header,
+                            sizeof(v)))
+      gain = v.value;
 
   -- Output --
 
@@ -209,6 +245,8 @@
     the plugin owns it the host ignores TEXT for that surface and draws over it only
     for its own system overlays (volume, battery). A surface the plugin does not claim
     stays the host's, e.g. for its own legends.
+  The plugin draws at the display's own size; one which wants a fixed canvas, e.g.
+  320x240 for a pixel art UI, scales it up itself.
 
   APIs: how the plugin draws a claimed surface. An API is named by a string, as
   clap.gui names window APIs, with a version of its own, so one API can change without
@@ -226,18 +264,29 @@
   frame display_render() gets (a pixel buffer, a framebuffer). Each is a union of
   pointers to that API's own structs, read by config.api and frame.api, with ptr for an
   API this header does not know; an API which needs nothing there has it null. Each
-  API says what it puts in them, and whether the host calls display_render() at all:
-  an API in which the plugin presents frames itself, an exclusive screen, never gets
-  one.
+  API says what it puts in them, and whether the host calls display_render() at all.
+
+  Presenting: each API says how a frame reaches the screen. With an API the host
+  renders on request, as pixels/1, the host presents what display_render() returned
+  RENDERED at the display's next refresh, whatever its rate (60 Hz, 120 Hz, variable),
+  and present_time_ns says when that is. An API in which the plugin owns a swapchain,
+  e.g. a later vulkan/1, presents frames itself with present modes of its own in its
+  own surface struct, and never gets display_render().
 
   pixels/1: the plugin draws XRGB8888 into the host's buffer, frame.surface.pixels,
-  and the host converts to what the display can show, as display_format says, so a
+  and the host converts to what the display can show, as color_format says, so a
   1-bit OLED is drawn in two colours. config.surface is null. Drawing is pull based:
-  the plugin calls display_request_frame() for a surface when it
-  has something new to show, and the host calls display_render() for it at most once
-  per refresh; apart from one display_render() after each display_set_visible(true)
-  the host never renders without a request, so an idle plugin costs nothing. To
-  animate, call display_request_frame() from display_render().
+  the plugin calls display_request_frame() for a surface when it has something new to
+  show, and the host calls display_render() for it at most once per refresh; apart
+  from one display_render() after each display_set_visible(true) the host never
+  renders without a request, so an idle plugin costs nothing. To animate, call
+  display_request_frame() from display_render(). display_render() returns RENDERED,
+  UNCHANGED when nothing differs from the previous frame, so the host uploads nothing,
+  or FAILED, when the host keeps the previous frame. With RENDERED the plugin may list
+  in damage the rectangles which changed since the previous frame, and the host
+  uploads only those; none listed means the whole canvas. With buffer_age, a plugin
+  which knows what changed redraws and sends only that, which matters for a large
+  panel on a slow bus and costs nothing for a scribble strip.
 
   -- Lifecycle --
 
@@ -247,7 +296,9 @@
   device may never wake, so save anything precious. Resume: the host calls resume(),
   then restores the plugin's lights, restarts processing, which brings a RESET on the
   audio thread, sends a RESET on the main thread and shows the displays again.
-  request_quit() asks the host to end the plugin, back to a launcher or off.
+  request_quit() asks the host to end the plugin, back to a launcher or off. Both are
+  about the host as a whole, not one controller: a controller which is unplugged is a
+  device removed.
 
   Threading: host functions are [main-thread] except request_process_main_thread,
   display_request_frame and get_time_ns, which are [thread-safe] and wait-free. The
@@ -259,17 +310,16 @@
   header.size and every offset are the same everywhere and no uninitialised byte is
   copied with an event. display_config, frame and pixels_surface are only ever passed
   by pointer, never copied, and follow the ABI's pointer size, as CLAP's own structs
-  do. A padding field only aligns what follows it; every info and config struct ends
-  in a reserved block, so it can grow without a new id. Padding and reserved fields
-  are 0.
+  do. A padding field only aligns what follows it; every info, detail and config
+  struct ends in a reserved block, so it can grow without a new id. Padding and
+  reserved fields are 0.
 
   Not covered: a panel the plugin declares for the host to bind physical
   controls to (keys, encoders, legends);
   curves the host draws on a surface, in the data model of clap.mini-curve-display;
-  layers, damage rectangles and plugin-owned buffers for pixels; display APIs beyond
-  pixels/1, such as GLES or an exclusive screen (e.g. KMS/DRM), which the API
-  hook leaves room for; moving motorized faders; a writable data folder, battery and
-  background states.
+  layers and plugin-owned buffers for pixels; display APIs beyond pixels/1, such as
+  GLES, Vulkan or an exclusive screen (e.g. KMS/DRM), which the API hook leaves room
+  for; moving motorized faders; a writable data folder, battery and background states.
 */
 // clang-format on
 
@@ -293,26 +343,45 @@ extern "C" {
 // In a role field: the element has no role.
 static const CLAP_CONSTEXPR uint32_t CLAP_EMBEDDED_HARDWARE_NO_ROLE = UINT32_MAX;
 
-/* -- The device -- */
+/* -- Devices -- */
 
+enum clap_embedded_hardware_device_flags {
+   // The host runs inside this device: a pedal, a desk, a handheld. At most one device
+   // has it, and suspend() and request_quit() are about it.
+   CLAP_EMBEDDED_HARDWARE_DEVICE_HOST = 1 << 0,
+
+   // The device can be attached or removed while the plugin runs, e.g. a controller on
+   // USB. See hardware_changed and RESET.
+   CLAP_EMBEDDED_HARDWARE_DEVICE_REMOVABLE = 1 << 1,
+};
+
+// Every field but id, flags and product may be "" when the host does not know it; a
+// generic USB pad may have no more than a product name.
 typedef struct clap_embedded_hardware_device_info {
-   // For display, e.g. "Example Audio", "FamousAudioCompany", "RetroHandheld Inc."
-   char vendor[CLAP_NAME_SIZE];
+   // See identity at the top
+   clap_id id;
 
-   // For display, e.g. "Demo Box", "RG29XX Plus"
+   // clap_embedded_hardware_device_flags
+   uint32_t flags;
+
+   // For display, never "", e.g. "Demo Box", "RG29XX Plus", "USB Gamepad"
    char product[CLAP_NAME_SIZE];
 
-   // Reverse DNS, stable for every unit of this model, e.g. "com.example.demobox".
+   // For display, e.g. "Example Audio", "RetroHandheld Inc."
+   char vendor[CLAP_NAME_SIZE];
+
+   // Reverse DNS, stable for every unit of this model, e.g. "com.example.demobox"; ""
+   // if the host cannot tell the model.
    char model_id[CLAP_NAME_SIZE];
 
-   // The processor, for a plugin which tunes itself to it, e.g. "Allwinner H700"; ""
-   // if unknown.
+   // The processor, for a plugin which tunes itself to it, e.g. "Allwinner H700". Only
+   // meaningful with DEVICE_HOST.
    char chip[CLAP_NAME_SIZE];
 
-   // This unit's serial number, "" if the device has none or does not tell.
+   // This unit's serial number
    char serial[CLAP_NAME_SIZE];
 
-   // Free form, "" if unknown
+   // Free form
    char hardware_revision[CLAP_NAME_SIZE];
    char firmware_version[CLAP_NAME_SIZE];
 
@@ -322,8 +391,8 @@ typedef struct clap_embedded_hardware_device_info {
 /* -- Panels -- */
 
 enum clap_embedded_hardware_panel_flags {
-   // The panel can be attached or removed while the plugin runs: an expander, a game
-   // controller. See hardware_changed and RESET.
+   // The panel can be attached or removed while its device stays: an expander, a game
+   // controller plugged into a handheld. See hardware_changed and RESET.
    CLAP_EMBEDDED_HARDWARE_PANEL_REMOVABLE = 1 << 0,
 
    // The host does not know the panel's size or where its controls are, e.g. a generic
@@ -347,14 +416,13 @@ enum clap_embedded_hardware_face {
 
 typedef struct clap_embedded_hardware_panel_info {
    clap_id id;
+   clap_id device_id;
 
    // clap_embedded_hardware_panel_flags
    uint32_t flags;
 
    // clap_embedded_hardware_face
    uint32_t face;
-
-   uint32_t padding;
 
    // For display, e.g. "Main", "Shoulder buttons", "Expander", "8BitDo SN30 Pro".
    char name[CLAP_NAME_SIZE];
@@ -376,56 +444,59 @@ typedef struct clap_embedded_hardware_panel_info {
 enum clap_embedded_hardware_element_kind {
    // Inputs
 
-   // A push button; see MOMENTARY/LATCHING, VELOCITY, PRESSURE, ANALOG. Sends BUTTON.
+   // A push button; see MOMENTARY/LATCHING, VELOCITY, PRESSURE, ANALOG. Sends BUTTON,
+   // and VALUE with PRESSURE or ANALOG. Details: CONTINUOUS with PRESSURE or ANALOG.
    CLAP_EMBEDDED_HARDWARE_KIND_BUTTON = 0,
 
-   // A switch with `steps` fixed positions, 2 for a toggle, a lid or a headphone jack.
-   // Sends POSITION.
+   // A switch with fixed positions, 2 for a toggle, a lid or a headphone jack. Sends
+   // SWITCH. Details: SWITCH.
    CLAP_EMBEDDED_HARDWARE_KIND_SWITCH = 1,
 
-   // An absolute rotary control, a potentiometer. Sends VALUE.
+   // An absolute rotary control, a potentiometer. Sends VALUE. Details: CONTINUOUS.
    CLAP_EMBEDDED_HARDWARE_KIND_POT = 2,
 
-   // An absolute linear control. Sends VALUE
+   // An absolute linear control. Sends VALUE. Details: CONTINUOUS.
    CLAP_EMBEDDED_HARDWARE_KIND_FADER = 3,
 
    // An endless relative rotary control. Sends DELTA; its push switch, if PUSHABLE, is a
-   // BUTTON whose parent is the encoder.
+   // BUTTON whose parent is the encoder. Details: ENCODER.
    CLAP_EMBEDDED_HARDWARE_KIND_ENCODER = 4,
 
    // A touch sensitive strip, one finger; sends VALUE for the position and TOUCH.
+   // Details: CONTINUOUS.
    CLAP_EMBEDDED_HARDWARE_KIND_TOUCH_STRIP = 5,
 
-   // An expression pedal, usually through a jack. Sends VALUE.
+   // An expression pedal, usually through a jack. Sends VALUE. Details: CONTINUOUS.
    CLAP_EMBEDDED_HARDWARE_KIND_PEDAL = 6,
 
-   // An analog stick, axis_count axes, springing back to its centre. Sends AXIS; its
-   // click is a BUTTON whose parent is the stick.
+   // An analog stick, springing back to its centre. Sends AXIS; its click is a BUTTON
+   // whose parent is the stick. Details: AXES.
    CLAP_EMBEDDED_HARDWARE_KIND_STICK = 7,
 
-   // A touch screen or pad, up to max_touch_points fingers. Sends TOUCH_POINT. One laid
-   // over a display has that display as its parent.
+   // A touch screen or pad. Sends TOUCH_POINT. One laid over a display has that display
+   // as its parent. Details: TOUCH_SURFACE.
    CLAP_EMBEDDED_HARDWARE_KIND_TOUCH_SURFACE = 8,
 
-   // An accelerometer or gyroscope, see its role; axis_count axes. Sends MOTION.
+   // An accelerometer or gyroscope, see its role. Sends MOTION. Details: AXES.
    CLAP_EMBEDDED_HARDWARE_KIND_MOTION = 9,
 
    // Outputs
 
-   // A single LED
+   // A single LED. Takes PIXELS. Details: LIGHT.
    CLAP_EMBEDDED_HARDWARE_KIND_LED = 64,
 
-   // pixel_count LEDs on an arc, see arc_start_deg and arc_sweep_deg.
+   // LEDs on an arc. Takes PIXELS. Details: LIGHT.
    CLAP_EMBEDDED_HARDWARE_KIND_LED_RING = 65,
 
-   // pixel_count LEDs on a line through the element's centre, along its width and
-   // turned by rotation_deg. Pixel 0 is at the left end before rotation.
+   // LEDs on a line through the element's centre, along its width and turned by
+   // rotation_deg; pixel 0 is at the left end before rotation. Takes PIXELS. Details:
+   // LIGHT.
    CLAP_EMBEDDED_HARDWARE_KIND_LED_STRIP = 66,
 
-   // A display, see display_kind
+   // A display. Takes TEXT, or is drawn through display_open. Details: DISPLAY.
    CLAP_EMBEDDED_HARDWARE_KIND_DISPLAY = 67,
 
-   // A vibration motor. Takes RUMBLE
+   // A vibration motor. Takes RUMBLE. Details: RUMBLE.
    CLAP_EMBEDDED_HARDWARE_KIND_RUMBLE = 68,
 };
 
@@ -457,7 +528,7 @@ enum clap_embedded_hardware_element_flags {
    // the plugin that the control may move under its own power.
    CLAP_EMBEDDED_HARDWARE_FLAG_MOTORIZED = 1 << 5,
 
-   // POT, ENCODER: clicks into `steps` detents per travel or revolution.
+   // POT, ENCODER: clicks into detents, see the CONTINUOUS and ENCODER details.
    CLAP_EMBEDDED_HARDWARE_FLAG_DETENTED = 1 << 6,
 
    // POT, FADER: has a single notch in the centre of its travel, which the user feels,
@@ -485,17 +556,6 @@ enum clap_embedded_hardware_element_flags {
    CLAP_EMBEDDED_HARDWARE_FLAG_PUSHABLE = 1 << 11,
 };
 
-enum clap_embedded_hardware_color_model {
-   // A single colour, native_color, at brightness_steps levels
-   CLAP_EMBEDDED_HARDWARE_COLOR_MONO = 0,
-
-   // Two dies, typically red and green, which together make an amber.
-   CLAP_EMBEDDED_HARDWARE_COLOR_BICOLOR = 1,
-
-   // Full colour
-   CLAP_EMBEDDED_HARDWARE_COLOR_RGB = 2,
-};
-
 // Where a print sits, as the user faces the panel.
 enum clap_embedded_hardware_label_position {
    // Unknown, or no print
@@ -510,37 +570,7 @@ enum clap_embedded_hardware_label_position {
    CLAP_EMBEDDED_HARDWARE_LABEL_RIGHT = 5,
 };
 
-enum clap_embedded_hardware_display_kind {
-   // Not a display
-   CLAP_EMBEDDED_HARDWARE_DISPLAY_NONE = 0,
-
-   // A character display: display_width columns by display_height rows. Takes TEXT.
-   CLAP_EMBEDDED_HARDWARE_DISPLAY_TEXT = 1,
-
-   // A pixel display: display_width x display_height pixels. Takes TEXT, or the
-   // plugin's own pixels through display_open.
-   CLAP_EMBEDDED_HARDWARE_DISPLAY_GRAPHIC = 2,
-};
-
-// What a display can show natively. The plugin draws XRGB8888 whatever this says, and
-// the host converts.
-enum clap_embedded_hardware_display_format {
-   // TEXT displays, and unknown
-   CLAP_EMBEDDED_HARDWARE_FORMAT_NONE = 0,
-
-   // On or off, in native_color, e.g. a monochrome OLED.
-   CLAP_EMBEDDED_HARDWARE_FORMAT_MONO1 = 1,
-
-   // 256 levels of native_color
-   CLAP_EMBEDDED_HARDWARE_FORMAT_GRAY8 = 2,
-
-   // 16 bit colour, 5 bits red, 6 green, 5 blue.
-   CLAP_EMBEDDED_HARDWARE_FORMAT_RGB565 = 3,
-
-   // 32 bit native endian 0xXXRRGGBB, as DRM_FORMAT_XRGB8888; X is ignored.
-   CLAP_EMBEDDED_HARDWARE_FORMAT_XRGB8888 = 4,
-};
-
+// What every element has. What only some kinds have is in its details.
 typedef struct clap_embedded_hardware_element_info {
    clap_id id;
    clap_id panel_id;
@@ -572,9 +602,8 @@ typedef struct clap_embedded_hardware_element_info {
    // clap_embedded_hardware_shape
    uint32_t shape;
 
-   // SWITCH: the number of positions. POT, FADER, PEDAL, TOUCH_STRIP: the resolution
-   // the device reads at. ENCODER: detents, or steps, per revolution. 0 if unknown.
-   uint32_t steps;
+   // clap_embedded_hardware_label_position
+   uint32_t label_position;
 
    // What is printed on or next to the element, "" if nothing.
    char label[CLAP_NAME_SIZE];
@@ -588,72 +617,189 @@ typedef struct clap_embedded_hardware_element_info {
    // The colour of the control itself, e.g. a red record button; alpha 0 if unknown.
    clap_color_t cap_color;
 
-   // clap_embedded_hardware_label_position
-   uint32_t label_position;
+   uint32_t reserved[4];
+} clap_embedded_hardware_element_info_t;
 
-   // STICK: 2, x and y. MOTION: 3. 0 otherwise.
+/* -- Element details -- */
+
+// What get_element_detail() reads; each kind says which it has.
+enum clap_embedded_hardware_detail_type {
+   // clap_embedded_hardware_detail_switch
+   CLAP_EMBEDDED_HARDWARE_DETAIL_SWITCH = 0,
+
+   // clap_embedded_hardware_detail_continuous
+   CLAP_EMBEDDED_HARDWARE_DETAIL_CONTINUOUS = 1,
+
+   // clap_embedded_hardware_detail_encoder
+   CLAP_EMBEDDED_HARDWARE_DETAIL_ENCODER = 2,
+
+   // clap_embedded_hardware_detail_axes
+   CLAP_EMBEDDED_HARDWARE_DETAIL_AXES = 3,
+
+   // clap_embedded_hardware_detail_touch_surface
+   CLAP_EMBEDDED_HARDWARE_DETAIL_TOUCH_SURFACE = 4,
+
+   // clap_embedded_hardware_detail_light
+   CLAP_EMBEDDED_HARDWARE_DETAIL_LIGHT = 5,
+
+   // clap_embedded_hardware_detail_display
+   CLAP_EMBEDDED_HARDWARE_DETAIL_DISPLAY = 6,
+
+   // clap_embedded_hardware_detail_rumble
+   CLAP_EMBEDDED_HARDWARE_DETAIL_RUMBLE = 7,
+};
+
+// Starts every detail; cast to the struct type names.
+typedef struct clap_embedded_hardware_detail_header {
+   // The bytes the host filled, header included
+   uint32_t size;
+
+   // clap_embedded_hardware_detail_type
+   uint32_t type;
+} clap_embedded_hardware_detail_header_t;
+
+typedef struct clap_embedded_hardware_detail_switch {
+   clap_embedded_hardware_detail_header_t header;
+
+   // At least 2; SWITCH events carry 0..position_count-1
+   uint32_t position_count;
+
+   uint32_t reserved[4];
+} clap_embedded_hardware_detail_switch_t;
+
+// POT, FADER, PEDAL, TOUCH_STRIP, and BUTTON with PRESSURE or ANALOG
+typedef struct clap_embedded_hardware_detail_continuous {
+   clap_embedded_hardware_detail_header_t header;
+
+   // Distinct values the device reads over the travel, 0 if unknown
+   uint32_t resolution;
+
+   // POT with DETENTED: the detents over the travel. 0 otherwise.
+   uint32_t detent_count;
+
+   uint32_t reserved[4];
+} clap_embedded_hardware_detail_continuous_t;
+
+typedef struct clap_embedded_hardware_detail_encoder {
+   clap_embedded_hardware_detail_header_t header;
+
+   // DELTA steps per revolution, the detents with DETENTED; 0 if unknown.
+   uint32_t steps_per_revolution;
+
+   uint32_t reserved[4];
+} clap_embedded_hardware_detail_encoder_t;
+
+// STICK, MOTION
+typedef struct clap_embedded_hardware_detail_axes {
+   clap_embedded_hardware_detail_header_t header;
+
+   // STICK: 2, x and y. MOTION: 3.
    uint32_t axis_count;
 
-   // TOUCH_SURFACE: the most fingers it tracks at once. 0 otherwise.
+   uint32_t reserved[4];
+} clap_embedded_hardware_detail_axes_t;
+
+typedef struct clap_embedded_hardware_detail_touch_surface {
+   clap_embedded_hardware_detail_header_t header;
+
+   // The most fingers it tracks at once
    uint32_t max_touch_points;
 
-   // LED, LED_RING, LED_STRIP, and DISPLAY in MONO1 or GRAY8:
+   uint32_t reserved[4];
+} clap_embedded_hardware_detail_touch_surface_t;
+
+enum clap_embedded_hardware_color_model {
+   // A single colour, native_color, at brightness_steps levels
+   CLAP_EMBEDDED_HARDWARE_COLOR_MONO = 0,
+
+   // Two dies, typically red and green, which together make an amber.
+   CLAP_EMBEDDED_HARDWARE_COLOR_BICOLOR = 1,
+
+   // Full colour
+   CLAP_EMBEDDED_HARDWARE_COLOR_RGB = 2,
+};
+
+// LED, LED_RING, LED_STRIP
+typedef struct clap_embedded_hardware_detail_light {
+   clap_embedded_hardware_detail_header_t header;
+
    // clap_embedded_hardware_color_model
    uint32_t color_model;
 
-   // The colour of a MONO LED or a monochrome display when fully lit; alpha is unused.
+   // The colour of a MONO LED when fully lit; alpha is unused.
    clap_color_t native_color;
 
-   // Outputs: distinct brightness levels per colour channel, 2 for plain on/off.
-   // RUMBLE: distinct intensities, 2 for plain on/off.
+   // Distinct brightness levels per colour channel, 2 for plain on/off.
    uint32_t brightness_steps;
 
    // LED: 1. LED_RING, LED_STRIP: the number of LEDs.
    uint32_t pixel_count;
 
-   uint32_t padding;
-
    // LED_RING: where pixel 0 sits, in degrees clockwise from 12 o'clock, and how far
    // the ring runs, clockwise, to the centre of the last pixel. A full ring of n
-   // pixels starting at the top has 0 and 360 * (n - 1) / n.
+   // pixels starting at the top has 0 and 360 * (n - 1) / n. 0 otherwise.
    double arc_start_deg;
    double arc_sweep_deg;
 
-   // DISPLAY: clap_embedded_hardware_display_kind; NONE for anything else
+   uint32_t reserved[4];
+} clap_embedded_hardware_detail_light_t;
+
+enum clap_embedded_hardware_display_kind {
+   // A character display: width columns by height rows. Takes TEXT.
+   CLAP_EMBEDDED_HARDWARE_DISPLAY_TEXT = 1,
+
+   // A pixel display: width x height pixels. Takes TEXT, or the plugin's own pixels
+   // through display_open.
+   CLAP_EMBEDDED_HARDWARE_DISPLAY_GRAPHIC = 2,
+};
+
+// The colours a display can show natively. The plugin draws pixels/1 in XRGB8888
+// whatever this says, and the host converts.
+enum clap_embedded_hardware_display_color_format {
+   // TEXT displays, and unknown
+   CLAP_EMBEDDED_HARDWARE_DISPLAY_COLOR_FORMAT_NONE = 0,
+
+   // On or off, in native_color, e.g. a monochrome OLED.
+   CLAP_EMBEDDED_HARDWARE_DISPLAY_COLOR_FORMAT_MONO1 = 1,
+
+   // 256 levels of native_color
+   CLAP_EMBEDDED_HARDWARE_DISPLAY_COLOR_FORMAT_GRAY8 = 2,
+
+   // 16 bit colour, 5 bits red, 6 green, 5 blue.
+   CLAP_EMBEDDED_HARDWARE_DISPLAY_COLOR_FORMAT_RGB565 = 3,
+
+   // 32 bit native endian 0xXXRRGGBB, as DRM_FORMAT_XRGB8888; X is ignored.
+   CLAP_EMBEDDED_HARDWARE_DISPLAY_COLOR_FORMAT_XRGB8888 = 4,
+};
+
+typedef struct clap_embedded_hardware_detail_display {
+   clap_embedded_hardware_detail_header_t header;
+
+   // clap_embedded_hardware_display_kind
    uint32_t display_kind;
 
-   // DISPLAY: TEXT: columns and rows. GRAPHIC: pixels, as the user sees the display;
-   // the host hides any rotation the panel is mounted with.
-   uint32_t display_width;
-   uint32_t display_height;
+   // TEXT: columns and rows. GRAPHIC: pixels, as the user sees the display; the host
+   // hides any rotation the panel is mounted with.
+   uint32_t width;
+   uint32_t height;
 
-   // DISPLAY: clap_embedded_hardware_display_format
-   uint32_t display_format;
+   // clap_embedded_hardware_display_color_format
+   uint32_t color_format;
 
-   uint32_t reserved[4];
-} clap_embedded_hardware_element_info_t;
+   // MONO1, GRAY8: the colour when fully lit; alpha is unused.
+   clap_color_t native_color;
 
-typedef struct clap_embedded_hardware_input_state {
-   // BUTTON: held, 0 or 1
-   uint32_t pressed;
+   uint32_t reserved[5];
+} clap_embedded_hardware_detail_display_t;
 
-   // TOUCH_STRIP, TOUCH_SURFACE, and any element with TOUCH_SENSE: a finger is on it.
-   uint32_t touched;
+typedef struct clap_embedded_hardware_detail_rumble {
+   clap_embedded_hardware_detail_header_t header;
 
-   // SWITCH: the position, 0..steps-1
-   uint32_t position;
-
-   uint32_t padding;
-
-   // POT, FADER, PEDAL, TOUCH_STRIP: the position, 0..1. BUTTON with PRESSURE or
-   // ANALOG: the pressure or pull.
-   double value;
-
-   // STICK, MOTION: the latest values, as AXIS and MOTION carry them.
-   double axes[3];
+   // Distinct intensities, 2 for plain on/off.
+   uint32_t intensity_steps;
 
    uint32_t reserved[4];
-} clap_embedded_hardware_input_state_t;
+} clap_embedded_hardware_detail_rumble_t;
 
 /* -- Roles -- */
 
@@ -706,7 +852,7 @@ enum clap_embedded_hardware_input_role {
    CLAP_EMBEDDED_HARDWARE_INPUT_VOLUME_UP = 70,
    CLAP_EMBEDDED_HARDWARE_INPUT_VOLUME_DOWN = 71,
 
-   // SWITCHes with 2 steps, sensing rather than played: position 1 is engaged.
+   // SWITCHes with 2 positions, sensing rather than played: position 1 is engaged.
    CLAP_EMBEDDED_HARDWARE_INPUT_LID = 80,             // 1 = lid closed
    CLAP_EMBEDDED_HARDWARE_INPUT_HEADPHONES = 81,      // 1 = plug inserted
    CLAP_EMBEDDED_HARDWARE_INPUT_FUNCTION_SWITCH = 82, // Two position slider, 1 = on
@@ -743,11 +889,14 @@ enum clap_embedded_hardware_output_role {
 
 /* -- Events -- */
 
+// These types overlap the core event types (BUTTON is NOTE_ON's 0), so test
+// header.space_id before header.type on every event; see checking spaces at the top.
+//
 // Common to every event in this space:
 // - header.space_id is the id the event registry gives for CLAP_EXT_EMBEDDED_HARDWARE
 // - header.time is the sample offset in process(), and 0 on the main thread
 // - input events have CLAP_EVENT_IS_LIVE in header.flags when a finger made them now,
-//   and not when they replay state after a RESET
+//   and not when they replay state after a RESET or answer get_input_state
 // - input events carry timestamp_ns, see get_time_ns.
 enum clap_embedded_hardware_event_type {
    // Inputs
@@ -755,13 +904,13 @@ enum clap_embedded_hardware_event_type {
    // clap_embedded_hardware_event_button
    CLAP_EMBEDDED_HARDWARE_EVENT_BUTTON = 0,
 
-   // clap_embedded_hardware_event_position
-   CLAP_EMBEDDED_HARDWARE_EVENT_POSITION = 1,
+   // clap_embedded_hardware_event_switch
+   CLAP_EMBEDDED_HARDWARE_EVENT_SWITCH = 1,
 
    // clap_embedded_hardware_event_value
    CLAP_EMBEDDED_HARDWARE_EVENT_VALUE = 2,
 
-   // clap_embedded_hardware_event_delta
+   // clap_embedded_hardware_event_delta; no state, get_input_state returns false
    CLAP_EMBEDDED_HARDWARE_EVENT_DELTA = 3,
 
    // clap_embedded_hardware_event_touch
@@ -774,7 +923,8 @@ enum clap_embedded_hardware_event_type {
    // so a plugin can leave out a high rate stream.
    CLAP_EMBEDDED_HARDWARE_EVENT_MOTION = 6,
 
-   // clap_embedded_hardware_event_touch_point, from a TOUCH_SURFACE
+   // clap_embedded_hardware_event_touch_point, from a TOUCH_SURFACE; one event per
+   // finger, so get_input_state returns false and fingers come only as events.
    CLAP_EMBEDDED_HARDWARE_EVENT_TOUCH_POINT = 7,
 
    // clap_embedded_hardware_event_reset; delivered to every thread which gets
@@ -810,16 +960,16 @@ typedef struct clap_embedded_hardware_event_button {
    double velocity;
 } clap_embedded_hardware_event_button_t;
 
-typedef struct clap_embedded_hardware_event_position {
+typedef struct clap_embedded_hardware_event_switch {
    clap_event_header_t header;
 
    clap_id element_id;
 
-   // 0..steps-1
-   uint32_t position;
+   // The position the switch is in, 0..position_count-1 of its SWITCH detail.
+   uint32_t selected_index;
 
    uint64_t timestamp_ns;
-} clap_embedded_hardware_event_position_t;
+} clap_embedded_hardware_event_switch_t;
 
 typedef struct clap_embedded_hardware_event_value {
    clap_event_header_t header;
@@ -838,7 +988,7 @@ typedef struct clap_embedded_hardware_event_delta {
 
    clap_id element_id;
 
-   // Positive is clockwise; in the element's steps, so a detented encoder sends one
+   // Positive is clockwise; in the encoder's steps, so a detented encoder sends one
    // per click. Accumulated if the device saw several since the last event.
    int32_t steps;
 
@@ -882,10 +1032,8 @@ enum clap_embedded_hardware_touch_phase {
 };
 
 // One finger on a TOUCH_SURFACE. Its x and y run 0..1 across the element, x right and y
-// down. On a surface laid over a display they run across that display as the user
-// sees it, or across the plugin's canvas when the host scales one up (see
-// display_get_preferred_size): touches beginning outside the canvas are not sent, and
-// a touch in progress may move outside 0..1.
+// down; on a surface laid over a display they run across that display as the user sees
+// it. A touch in progress may move outside 0..1.
 typedef struct clap_embedded_hardware_event_touch_point {
    clap_event_header_t header;
 
@@ -908,8 +1056,8 @@ typedef struct clap_embedded_hardware_event_touch_point {
 typedef struct clap_embedded_hardware_event_reset {
    clap_event_header_t header;
 
-   // The panel whose state to forget, CLAP_INVALID_ID for every panel. A panel no
-   // longer in the lists has been removed.
+   // The panel whose state to forget, CLAP_INVALID_ID for every panel of every device.
+   // A panel no longer in the lists has been removed.
    clap_id panel_id;
 
    uint32_t padding;
@@ -919,7 +1067,7 @@ typedef struct clap_embedded_hardware_event_reset {
 typedef struct clap_embedded_hardware_event_focus {
    clap_event_header_t header;
 
-   // The panel, CLAP_INVALID_ID for every panel
+   // The panel, CLAP_INVALID_ID for every panel of every device
    clap_id panel_id;
 
    // 1: the plugin's outputs on the panel are shown. 0: they may not be, for now.
@@ -1007,17 +1155,35 @@ typedef struct clap_embedded_hardware_event_text {
 
 /* -- Displays the plugin draws -- */
 
+// In pixels, x right and y down from the canvas's top left corner.
+typedef struct clap_embedded_hardware_rect {
+   uint32_t x;
+   uint32_t y;
+   uint32_t width;
+   uint32_t height;
+} clap_embedded_hardware_rect_t;
+
 // pixels/1's surface in a frame: the host's buffer, valid only during display_render.
 typedef struct clap_embedded_hardware_pixels_surface {
    void    *data;
    uint32_t stride_bytes;
 
-   // clap_embedded_hardware_display_format: XRGB8888 in pixels/1
-   uint32_t format;
+   // clap_embedded_hardware_display_color_format: XRGB8888 in pixels/1
+   uint32_t color_format;
 
    // 0: the contents are undefined, draw everything. n: the buffer holds the frame
    // presented n frames ago, so only what changed since needs redrawing.
    uint32_t buffer_age;
+
+   // The room in damage, at least 1.
+   uint32_t damage_capacity;
+
+   // The plugin writes the rectangles which changed since the previous frame here and
+   // their number in damage_count; 0 means the whole canvas. With more than
+   // damage_capacity, it writes one rectangle around them all, or 0.
+   clap_embedded_hardware_rect_t *damage;
+   uint32_t                       damage_count;
+
    uint32_t reserved[3];
 } clap_embedded_hardware_pixels_surface_t;
 
@@ -1032,8 +1198,7 @@ typedef struct clap_embedded_hardware_display_config {
       const void *ptr;
    } surface;
 
-   // The canvas the plugin draws, in pixels: the display's size, or the size the
-   // plugin asked for in display_get_preferred_size if the host scales it up.
+   // The display's size in pixels, as in its DISPLAY detail.
    uint32_t width;
    uint32_t height;
 
@@ -1050,8 +1215,8 @@ typedef struct clap_embedded_hardware_frame {
    // What the API hands over for this frame, selected by api.
    union {
       // pixels/1
-      const clap_embedded_hardware_pixels_surface_t *pixels;
-      const void                                    *ptr;
+      clap_embedded_hardware_pixels_surface_t *pixels;
+      void                                    *ptr;
    } surface;
 
    // Estimate of when this frame reaches the display, on the get_time_ns clock, for
@@ -1065,39 +1230,72 @@ typedef struct clap_embedded_hardware_frame {
    uint32_t reserved[4];
 } clap_embedded_hardware_frame_t;
 
+enum clap_embedded_hardware_render_result {
+   // The frame is drawn; present it, or the damage of it.
+   CLAP_EMBEDDED_HARDWARE_RENDER_RENDERED = 0,
+
+   // Nothing differs from the previous frame; upload nothing.
+   CLAP_EMBEDDED_HARDWARE_RENDER_UNCHANGED = 1,
+
+   // Drawing failed; keep the previous frame. The host may display_close a display
+   // which keeps failing.
+   CLAP_EMBEDDED_HARDWARE_RENDER_FAILED = 2,
+};
+
 /* -- The host side -- */
 
 typedef struct clap_host_embedded_hardware {
-   // Returns false if the device does not describe itself.
+   // The devices shown to the plugin now.
    // [main-thread]
-   bool(CLAP_ABI *get_device_info)(const clap_host_t                    *host,
-                                   clap_embedded_hardware_device_info_t *info);
+   uint32_t(CLAP_ABI *count_devices)(const clap_host_t *host);
 
-   // The panels attached now.
    // [main-thread]
-   uint32_t(CLAP_ABI *count_panels)(const clap_host_t *host);
+   bool(CLAP_ABI *get_device)(const clap_host_t                    *host,
+                              uint32_t                              index,
+                              clap_embedded_hardware_device_info_t *info);
+
+   // The panels of one device attached now.
+   // [main-thread]
+   uint32_t(CLAP_ABI *count_panels)(const clap_host_t *host, clap_id device_id);
 
    // [main-thread]
    bool(CLAP_ABI *get_panel)(const clap_host_t                   *host,
+                             clap_id                              device_id,
                              uint32_t                             index,
                              clap_embedded_hardware_panel_info_t *panel);
 
-   // The elements on every panel attached now; filter on panel_id for one panel.
+   // The elements on one panel.
    // [main-thread]
-   uint32_t(CLAP_ABI *count_elements)(const clap_host_t *host);
+   uint32_t(CLAP_ABI *count_elements)(const clap_host_t *host, clap_id panel_id);
 
    // [main-thread]
    bool(CLAP_ABI *get_element)(const clap_host_t                     *host,
+                               clap_id                                panel_id,
                                uint32_t                               index,
                                clap_embedded_hardware_element_info_t *element);
 
-   // Where an input is now. A pot is somewhere before anyone turns it, so a plugin
-   // reads this once it has the extension rather than waiting for an event. Returns
-   // false for an unknown id or an output.
+   // One detail of an element, see details at the top. The plugin passes the struct
+   // detail_type names and its size in capacity; the host fills up to capacity bytes,
+   // header included, and zeroes the rest. Returns false for an unknown id, a detail
+   // the element does not have or a capacity smaller than the struct in this header.
    // [main-thread]
-   bool(CLAP_ABI *get_input_state)(const clap_host_t                    *host,
-                                   clap_id                               element_id,
-                                   clap_embedded_hardware_input_state_t *state);
+   bool(CLAP_ABI *get_element_detail)(const clap_host_t                      *host,
+                                      clap_id                                 element_id,
+                                      uint32_t                                detail_type,
+                                      clap_embedded_hardware_detail_header_t *detail,
+                                      uint32_t                                capacity);
+
+   // Where an input is now, as the event of event_type a RESET would replay, header
+   // included: the plugin passes that event's struct and its size in capacity. See
+   // state at the top. Returns false for an unknown id, an output, an event type the
+   // element does not send, DELTA and TOUCH_POINT, which have no single state, or a
+   // capacity smaller than the event.
+   // [main-thread]
+   bool(CLAP_ABI *get_input_state)(const clap_host_t   *host,
+                                   clap_id              element_id,
+                                   uint16_t             event_type,
+                                   clap_event_header_t *state,
+                                   uint32_t             capacity);
 
    // The answers from clap_plugin_embedded_hardware.input_routing or
    // output_routing have changed; the host asks again for every input, output and
@@ -1143,14 +1341,14 @@ typedef struct clap_host_embedded_hardware {
    // [main-thread]
    void(CLAP_ABI *request_quit)(const clap_host_t *host, const char *reason);
 
-   // A property of the device (panel_id CLAP_INVALID_ID) or of one panel, by key; see
-   // properties above. Copies the value, UTF-8 and NUL terminated, into value,
-   // truncated to capacity bytes, and returns its length without the NUL, as snprintf
-   // does, so a plugin can ask again with a bigger buffer. Returns -1, with value ""
-   // if capacity allows, for a key the host does not know or an unknown panel.
+   // A property of a device or of one panel, by id and key; see properties above.
+   // Copies the value, UTF-8 and NUL terminated, into value, truncated to capacity
+   // bytes, and returns its length without the NUL, as snprintf does, so a plugin can
+   // ask again with a bigger buffer. Returns -1, with value "" if capacity allows, for
+   // a key the host does not know or an unknown id.
    // [main-thread]
    int32_t(CLAP_ABI *get_property)(
-      const clap_host_t *host, clap_id panel_id, const char *key, char *value, uint32_t capacity);
+      const clap_host_t *host, clap_id id, const char *key, char *value, uint32_t capacity);
 
    // Whether the host can offer this API on a GRAPHIC display; always true for
    // CLAP_EMBEDDED_HARDWARE_DISPLAY_API_PIXELS. See -- Displays --
@@ -1176,10 +1374,8 @@ typedef struct clap_plugin_embedded_hardware {
    // host the plugin does not use them for now. Asked after init() has returned, once
    // the plugin has asked the event registry for the space (typically in init(), which
    // is why the host waits for it to return), for every input and every
-   // event type its kind sends (BUTTON: BUTTON, and VALUE with PRESSURE or ANALOG;
-   // SWITCH: POSITION; POT, FADER, PEDAL: VALUE; ENCODER: DELTA; TOUCH_STRIP: VALUE and
-   // TOUCH; STICK: AXIS; TOUCH_SURFACE: TOUCH_POINT; MOTION: MOTION; any with
-   // TOUCH_SENSE: TOUCH), and again after hardware_changed and routing_changed.
+   // event type its kind sends (see each kind), and again after hardware_changed and
+   // routing_changed.
    // [main-thread]
    uint32_t(CLAP_ABI *input_routing)(const clap_plugin_t *plugin,
                                      clap_id              element_id,
@@ -1199,14 +1395,16 @@ typedef struct clap_plugin_embedded_hardware {
    // TEXT) into out. Called when there are inputs to deliver, and after
    // request_process_main_thread(), when in may be empty. Never called from inside a
    // call the plugin is making. A valid host only puts this extension's events in in,
-   // but a plugin checks header.space_id and header.type and skips what it does not know.
+   // but a plugin checks header.space_id and header.type, carefully and fully as in
+   // process(), and skips what it does not know; see checking spaces at the top.
    // [main-thread]
    void(CLAP_ABI *process_main_thread)(const clap_plugin_t        *plugin,
                                        const clap_input_events_t  *in,
                                        const clap_output_events_t *out);
 
-   // Panels came or went; re-read the lists. The ids of elements which are still there are
-   // unchanged. Held state is cleared by the RESET for that panel, not by this call.
+   // Devices or panels came or went; re-read the lists. The ids of devices, panels and
+   // elements which are still there are unchanged. Held state is cleared by the RESET
+   // for each panel, not by this call.
    // [main-thread]
    void(CLAP_ABI *hardware_changed)(const clap_plugin_t *plugin);
 
@@ -1218,17 +1416,6 @@ typedef struct clap_plugin_embedded_hardware {
    bool(CLAP_ABI *display_get_preferred_api)(const clap_plugin_t *plugin,
                                              clap_id              display_id,
                                              const char         **api);
-
-   // A GRAPHIC display, drawn with api: on entry width and height are its size. Return
-   // true and write a smaller size to have the host scale up a fixed canvas, e.g.
-   // 320x240 for a pixel art UI; false to draw at the display's size. The host need not
-   // honour it; the config has the final size.
-   // [main-thread]
-   bool(CLAP_ABI *display_get_preferred_size)(const clap_plugin_t *plugin,
-                                              clap_id              display_id,
-                                              const char          *api,
-                                              uint32_t            *width,
-                                              uint32_t            *height);
 
    // The host offers a GRAPHIC display, to be drawn with config->api, once it has asked
    // input_routing; true claims it, false leaves it to the host and to TEXT events, or
@@ -1246,19 +1433,20 @@ typedef struct clap_plugin_embedded_hardware {
                                        bool                 visible);
 
    // Draws one frame into frame->surface, as frame->api says: for pixels/1 into
-   // frame->surface.pixels->data. Only called while visible, and only for an API which
-   // renders on request. Returns true to present it, false to keep the previous frame.
+   // frame->surface.pixels->data, listing what changed in its damage. Only called while
+   // visible, and only for an API which renders on request. Returns a
+   // clap_embedded_hardware_render_result.
    // [main-thread]
-   bool(CLAP_ABI *display_render)(const clap_plugin_t                  *plugin,
-                                  clap_id                               display_id,
-                                  const clap_embedded_hardware_frame_t *frame);
+   uint32_t(CLAP_ABI *display_render)(const clap_plugin_t                  *plugin,
+                                      clap_id                               display_id,
+                                      const clap_embedded_hardware_frame_t *frame);
 
    // The host takes a claimed display back, e.g. when its panel goes, on suspend or
    // before destroy; free what display_open allocated.
    // [main-thread]
    void(CLAP_ABI *display_close)(const clap_plugin_t *plugin, clap_id display_id);
 
-   // The device goes to sleep or wakes; see -- Lifecycle -- at the top.
+   // The host's device goes to sleep or wakes; see -- Lifecycle -- at the top.
    // [main-thread]
    void(CLAP_ABI *suspend)(const clap_plugin_t *plugin);
    void(CLAP_ABI *resume)(const clap_plugin_t *plugin);
