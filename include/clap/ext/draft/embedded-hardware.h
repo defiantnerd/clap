@@ -1136,8 +1136,9 @@ typedef struct clap_embedded_hardware_event_rumble {
    double intensity;
 } clap_embedded_hardware_event_rumble_t;
 
-// The longest line a TEXT event carries, terminating zero included.
-#define CLAP_EMBEDDED_HARDWARE_TEXT_SIZE 64
+// The size in bytes, not characters, of a TEXT event's line: a UTF-8 string of up to
+// 127 bytes plus its terminating zero.
+#define CLAP_EMBEDDED_HARDWARE_TEXT_SIZE 128
 
 // Sets one line of a display the host draws: any TEXT display, or a GRAPHIC one the
 // plugin has not claimed. The line is replaced whole; the host cuts it at the
